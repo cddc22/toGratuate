@@ -193,8 +193,8 @@ if __name__ == "__main__":
 
 
     cur_dir = os.path.abspath(__file__).rsplit("/", 1)[0]
-    log_path = os.path.join(cur_dir, 'LOG/' + args.dataset + '/' + args.identity + '.log')
-    logger = logger_config(log_path='LOG/' + args.dataset + '/' + args.identity + '.log', logging_name=args.identity)
+    log_path = os.path.join(cur_dir, 'toGratuate/LOG/' + args.dataset + '/' + args.identity + '.log')
+    logger = logger_config(log_path='toGratuate/LOG/' + args.dataset + '/' + args.identity + '.log', logging_name=args.identity)
 
     logger.info(args)
     device = torch.device("cuda:" + str(args.gpu) )

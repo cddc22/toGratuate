@@ -134,110 +134,110 @@ class DPFedSAMAPI(object):
 
  
 
-def _client_sampling(self, round_idx, client_num_in_total, client_num_per_round):
-    if client_num_in_total == client_num_per_round:
-        client_indexes = list(range(client_num_in_total))
-    else:
-        num_clients = min(client_num_per_round, client_num_in_total)
-        np.random.seed(round_idx)
-        client_indexes = np.random.choice(range(client_num_in_total), num_clients, replace=False)
-    self.logger.info("client_indexes = %s" % str(client_indexes))
-    return client_indexes
+    def _client_sampling(self, round_idx, client_num_in_total, client_num_per_round):
+        if client_num_in_total == client_num_per_round:
+            client_indexes = list(range(client_num_in_total))
+        else:
+            num_clients = min(client_num_per_round, client_num_in_total)
+            np.random.seed(round_idx)
+            client_indexes = np.random.choice(range(client_num_in_total), num_clients, replace=False)
+        self.logger.info("client_indexes = %s" % str(client_indexes))
+        return client_indexes
 
-def _aggregate(self, w_locals):
-    training_num = sum(sample_num for sample_num, _ in w_locals)
-    
-    w_global = {}
-    for k in w_locals[0][1].keys():
-        w_global[k] = torch.zeros_like(w_locals[0][1][k], device=self.device)
-        for sample_num, local_params in w_locals:
-            w = sample_num / training_num
-            w_global[k] += local_params[k] * w
-    return w_global
-
-def _train_on_sample_clients(self, loss_locals, acc_locals, total_locals, round_idx, client_sample_number):
-    self.logger.info("################global_train_on_all_clients : {}".format(round_idx))
-
-    # 使用 torch 计算平均值以提高效率
-    g_train_acc = torch.mean(torch.tensor([acc/total for acc, total in zip(acc_locals, total_locals)]))
-    g_train_loss = torch.mean(torch.tensor([loss/total for loss, total in zip(loss_locals, total_locals)]))
-
-    print('The averaged global_train_acc:{}, global_train_loss:{}'.format(g_train_acc, g_train_loss))
-    stats = {'The averaged global_train_acc': g_train_acc.item(), 'global_train_loss': g_train_loss.item()}
-    self.stat_info["global_train_acc"].append(g_train_acc.item())
-    self.stat_info["global_train_loss"].append(g_train_loss.item())
-    self.logger.info(stats)
-
-def _test_on_all_clients(self, w_global, round_idx):
-    self.logger.info("################global_test_on_all_clients : {}".format(round_idx))
-    
-    g_test_metrics = {
-        'num_samples': [],
-        'num_correct': [],
-        'losses': []
-    }
-
-    for client_idx in range(self.args.client_num_in_total):
-        client = self.client_list[client_idx]
-        g_test_local_metrics = client.local_test(w_global, True)
+    def _aggregate(self, w_locals):
+        training_num = sum(sample_num for sample_num, _ in w_locals)
         
-        g_test_metrics['num_samples'].append(g_test_local_metrics['test_total'])
-        g_test_metrics['num_correct'].append(g_test_local_metrics['test_correct'])
-        g_test_metrics['losses'].append(g_test_local_metrics['test_loss'])
+        w_global = {}
+        for k in w_locals[0][1].keys():
+            w_global[k] = torch.zeros_like(w_locals[0][1][k], device=self.device)
+            for sample_num, local_params in w_locals:
+                w = sample_num / training_num
+                w_global[k] += local_params[k] * w
+        return w_global
 
-        if self.args.ci == 1:
-            break
+    def _train_on_sample_clients(self, loss_locals, acc_locals, total_locals, round_idx, client_sample_number):
+        self.logger.info("################global_train_on_all_clients : {}".format(round_idx))
 
-    # 使用 torch 计算平均值
-    g_test_acc = torch.mean(torch.tensor([correct/total for correct, total in 
-                           zip(g_test_metrics['num_correct'], g_test_metrics['num_samples'])]))
-    g_test_loss = torch.mean(torch.tensor([loss/total for loss, total in 
-                            zip(g_test_metrics['losses'], g_test_metrics['num_samples'])]))
+        # 使用 torch 计算平均值以提高效率
+        g_train_acc = torch.mean(torch.tensor([acc/total for acc, total in zip(acc_locals, total_locals)]))
+        g_train_loss = torch.mean(torch.tensor([loss/total for loss, total in zip(loss_locals, total_locals)]))
 
-    stats = {'global_test_acc': g_test_acc.item(), 'global_test_loss': g_test_loss.item()}
-    self.stat_info["global_test_acc"].append(g_test_acc.item())
-    self.stat_info["global_test_loss"].append(g_test_loss.item())
-    self.logger.info(stats)
+        print('The averaged global_train_acc:{}, global_train_loss:{}'.format(g_train_acc, g_train_loss))
+        stats = {'The averaged global_train_acc': g_train_acc.item(), 'global_train_loss': g_train_loss.item()}
+        self.stat_info["global_train_acc"].append(g_train_acc.item())
+        self.stat_info["global_train_loss"].append(g_train_loss.item())
+        self.logger.info(stats)
 
-def _save_and_print_results(self, round_idx, exper_index, w_global):
-    print('global_train_loss={}'.format(self.stat_info["global_train_loss"]))
-    print('global_train_acc={}'.format(self.stat_info["global_train_acc"]))
-    print('global_test_loss={}'.format(self.stat_info["global_test_loss"]))
-    print('global_test_acc={}'.format(self.stat_info["global_test_acc"]))
-    
-    self.logger.info("################Communication round : {}".format(round_idx))
-    
-    if round_idx % 200 == 0 or round_idx == self.args.comm_round-1:
-        self.logger.info("################The final results, Experiment times: {}".format(exper_index))
+    def _test_on_all_clients(self, w_global, round_idx):
+        self.logger.info("################global_test_on_all_clients : {}".format(round_idx))
         
-        # 保存本地范数
-        save_path = os.path.join("./LOG/cifar10/dumps", f"local_norm_dpfedsam_{self.args.p}_.dat")
-        np.array(self.stat_info["local_norm"]).dump(save_path)
-        
-        # 保存模型
-        if self.args.dataset == "cifar10":
-            model = customized_resnet18(10)
-            model.load_state_dict(copy.deepcopy(w_global))
-            model = model.to(self.device)
+        g_test_metrics = {
+            'num_samples': [],
+            'num_correct': [],
+            'losses': []
+        }
+
+        for client_idx in range(self.args.client_num_in_total):
+            client = self.client_list[client_idx]
+            g_test_local_metrics = client.local_test(w_global, True)
             
-            save_dir = f"{os.getcwd()}/save_model"
-            os.makedirs(save_dir, exist_ok=True)
+            g_test_metrics['num_samples'].append(g_test_local_metrics['test_total'])
+            g_test_metrics['num_correct'].append(g_test_local_metrics['test_correct'])
+            g_test_metrics['losses'].append(g_test_local_metrics['test_loss'])
+
+            if self.args.ci == 1:
+                break
+
+        # 使用 torch 计算平均值
+        g_test_acc = torch.mean(torch.tensor([correct/total for correct, total in 
+                               zip(g_test_metrics['num_correct'], g_test_metrics['num_samples'])]))
+        g_test_loss = torch.mean(torch.tensor([loss/total for loss, total in 
+                                zip(g_test_metrics['losses'], g_test_metrics['num_samples'])]))
+
+        stats = {'global_test_acc': g_test_acc.item(), 'global_test_loss': g_test_loss.item()}
+        self.stat_info["global_test_acc"].append(g_test_acc.item())
+        self.stat_info["global_test_loss"].append(g_test_loss.item())
+        self.logger.info(stats)
+
+    def _save_and_print_results(self, round_idx, exper_index, w_global):
+        print('global_train_loss={}'.format(self.stat_info["global_train_loss"]))
+        print('global_train_acc={}'.format(self.stat_info["global_train_acc"]))
+        print('global_test_loss={}'.format(self.stat_info["global_test_loss"]))
+        print('global_test_acc={}'.format(self.stat_info["global_test_acc"]))
+        
+        self.logger.info("################Communication round : {}".format(round_idx))
+        
+        if round_idx % 200 == 0 or round_idx == self.args.comm_round-1:
+            self.logger.info("################The final results, Experiment times: {}".format(exper_index))
             
-            if self.args.spar_rand:
-                model_path = os.path.join(save_dir, 
-                    f"dp-fedsam_threshold{self.args.C}_rho{self.args.rho}_spar_rand_p{self.args.p}.pth.tar")
-            else:
-                model_path = os.path.join(save_dir,
-                    f"dp-fedsam_threshold{self.args.C}_rho{self.args.rho}_spar_topk_p{self.args.p}.pth.tar")
+            # 保存本地范数
+            save_path = os.path.join("./LOG/cifar10/dumps", f"local_norm_dpfedsam_{self.args.p}_.dat")
+            np.array(self.stat_info["local_norm"]).dump(save_path)
+            
+            # 保存模型
+            if self.args.dataset == "cifar10":
+                model = customized_resnet18(10)
+                model.load_state_dict(copy.deepcopy(w_global))
+                model = model.to(self.device)
                 
-            torch.save(model, model_path)
+                save_dir = f"{os.getcwd()}/save_model"
+                os.makedirs(save_dir, exist_ok=True)
+                
+                if self.args.spar_rand:
+                    model_path = os.path.join(save_dir, 
+                        f"dp-fedsam_threshold{self.args.C}_rho{self.args.rho}_spar_rand_p{self.args.p}.pth.tar")
+                else:
+                    model_path = os.path.join(save_dir,
+                        f"dp-fedsam_threshold{self.args.C}_rho{self.args.rho}_spar_topk_p{self.args.p}.pth.tar")
+                    
+                torch.save(model, model_path)
 
-    self.logger.info('local_norm = {}'.format(self.stat_info["local_norm"]))
-    self.logger.info('global_norm = {}'.format(self.stat_info["global_norm"]))
-    self.logger.info('global_train_loss={}'.format(self.stat_info["global_train_loss"]))
-    self.logger.info('global_train_acc={}'.format(self.stat_info["global_train_acc"]))
-    self.logger.info('global_test_loss={}'.format(self.stat_info["global_test_loss"]))
-    self.logger.info('global_test_acc={}'.format(self.stat_info["global_test_acc"]))
+        self.logger.info('local_norm = {}'.format(self.stat_info["local_norm"]))
+        self.logger.info('global_norm = {}'.format(self.stat_info["global_norm"]))
+        self.logger.info('global_train_loss={}'.format(self.stat_info["global_train_loss"]))
+        self.logger.info('global_train_acc={}'.format(self.stat_info["global_train_acc"]))
+        self.logger.info('global_test_loss={}'.format(self.stat_info["global_test_loss"]))
+        self.logger.info('global_test_acc={}'.format(self.stat_info["global_test_acc"]))
 
     def init_stat_info(self):
         self.stat_info = {}
@@ -253,8 +253,8 @@ def _save_and_print_results(self, round_idx, exper_index, w_global):
         self.stat_info["global_norm"] = []
         self.stat_info["local_norm"] = []
 
-@torch.no_grad()
-def record_avg_inference_flops(self, w_global, mask_pers=None):
+    @torch.no_grad()
+    def record_avg_inference_flops(self, w_global, mask_pers=None):
         inference_flops = []
         for client_idx in range(self.args.client_num_in_total):
             if mask_pers is None:
@@ -269,16 +269,16 @@ def record_avg_inference_flops(self, w_global, mask_pers=None):
         avg_inference_flops = sum(inference_flops) / len(inference_flops)
         return avg_inference_flops
 
-def _to_device(self, data):
+    def _to_device(self, data):
         """Helper function to move data to device"""
         if isinstance(data, (list, tuple)):
             return [self._to_device(x) for x in data]
         return data.to(self.device, non_blocking=True)
 
-def _clean_gpu_memory(self):
+    def _clean_gpu_memory(self):
         """Helper function to clean GPU memory"""
         torch.cuda.empty_cache()
         
-def get_stat_info(self):
+    def get_stat_info(self):
         """Return training statistics"""
         return self.stat_info

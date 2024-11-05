@@ -5,6 +5,7 @@ import pdb
 import numpy as np
 import torch
 from torch import nn
+from tqdm import tqdm
 
 from fedml_api.dpfedsam.sam import SAM, enable_running_stats, disable_running_stats
 from fedml_api.model.cv.cnn_meta import Meta_net
@@ -54,7 +55,7 @@ class MyModelTrainer(ModelTrainer):
         base_optimizer = torch.optim.SGD
         optimizer = SAM(self.model.parameters(), base_optimizer, rho=args.rho, adaptive=args.adaptive, lr=args.lr* (args.lr_decay**round), momentum=args.momentum, weight_decay=args.wd)
         
-        for epoch in range(args.epochs):
+        for epoch in tqdm(range(args.epochs)):
             epoch_loss, epoch_acc = [], []
             for batch_idx, (x, labels) in enumerate(train_data):
                 x, labels = x.to(device), labels.to(device)
@@ -92,8 +93,8 @@ class MyModelTrainer(ModelTrainer):
                 #            100. * (batch_idx + 1) / len(train_data), loss.item()))
                 
 
-            print('Client Index = {}\tEpoch: {}\tLoss: {:.6f}'.format(
-                self.id, epoch, sum(epoch_loss) / len(epoch_loss)))
+            # print('Client Index = {}\tEpoch: {}\tLoss: {:.6f}'.format(
+            #     self.id, epoch, sum(epoch_loss) / len(epoch_loss)))
                 
             # logger.info('Client Index = {}\tEpoch: {}\tLoss: {:.6f}'.format(
                 # self.id, epoch, sum(epoch_loss) / len(epoch_loss)))

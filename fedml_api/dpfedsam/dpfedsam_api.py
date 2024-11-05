@@ -33,6 +33,13 @@ class DPFedSAMAPI(object):
         self.model_trainer = model_trainer
         self._setup_clients(train_data_local_num_dict, train_data_local_dict, test_data_local_dict, model_trainer)
         self.init_stat_info()
+    def _setup_clients(self, train_data_local_num_dict, train_data_local_dict, test_data_local_dict, model_trainer):
+        self.logger.info("############setup_clients (START)#############")
+        for client_idx in range(self.args.client_num_in_total):
+            c = Client(client_idx, train_data_local_dict[client_idx], test_data_local_dict[client_idx],
+                       train_data_local_num_dict[client_idx], self.args, self.device, model_trainer, self.logger)
+            self.client_list.append(c)
+        self.logger.info("############setup_clients (END)#############")
 
     def train(self, exper_index):
         # 更新 GradScaler 初始化

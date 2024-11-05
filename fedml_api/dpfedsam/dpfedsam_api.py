@@ -82,67 +82,69 @@ class DPFedSAMAPI(object):
 
             loss_locals, acc_locals, total_locals = [], [], []
             norm_list = []
-            
             for cur_clnt in client_indexes:
-            client = self.client_list[cur_clnt]
+                client = self.client_list[cur_clnt]
             
-            # 使用混合精度训练
-            with autocast():
-                w_per, training_flops, num_comm_params, metrics = client.train(copy.deepcopy(w_global), round_idx)
-            
-            # 计算本地更新并添加DP噪声
-            nabala = {k: (w_per[k] - w_global[k]).to(self.device) for k in w_per.keys()}
-            
-            norm = 0.0
-            for name in nabala.keys():
-                norm += pow(nabala[name].norm(2), 2)
+                # 使用混合精度训练
+                with autocast():
+                    w_per, training_flops, num_comm_params, metrics = client.train(copy.deepcopy(w_global), round_idx)
                 
-                # 生成噪声并移至GPU
-                noise = torch.normal(
-                    0, 
-                    self.args.sigma * self.args.C /np.sqrt(self.args.client_num_per_round),
-                    nabala[name].shape,
-                    device=self.device
-                )
+                # 计算本地更新并添加DP噪声
+                nabala = {k: (w_per[k] - w_global[k]).to(self.device) for k in w_per.keys()}
                 
-                # 裁剪和添加噪声
-                nabala[name] *= min(1, self.args.C/torch.norm(nabala[name], 2))
-                nabala[name].add_(noise)
+                norm = 0.0
+                for name in nabala.keys():
+                    norm += pow(nabala[name].norm(2), 2)
+                    
+                    # 生成噪声并移至GPU
+                    noise = torch.normal(
+                        0, 
+                        self.args.sigma * self.args.C /np.sqrt(self.args.client_num_per_round),
+                        nabala[name].shape,
+                        device=self.device
+                    )
+                    
+                    # 裁剪和添加噪声
+                    nabala[name] *= min(1, self.args.C/torch.norm(nabala[name], 2))
+                    nabala[name].add_(noise)
 
-            total_norm = torch.sqrt(norm).cpu().numpy().reshape(1)
-            norm_list.append(total_norm[0])
+                total_norm = torch.sqrt(norm).cpu().numpy().reshape(1)
+                norm_list.append(total_norm[0])
 
-            w_per = {k: w_global[k] + nabala[k] for k in w_global.keys()}
+                w_per = {k: w_global[k] + nabala[k] for k in w_global.keys()}
+                
+                w_locals.append((client.get_sample_number(), copy.deepcopy(w_per)))
+                nabala_w.append((client.get_sample_number(), nabala))
+                
+                self.stat_info["sum_training_flops"] += training_flops
+                self.stat_info["sum_comm_params"] += num_comm_params
+                loss_locals.append(metrics['train_loss'])
+                acc_locals.append(metrics['train_correct']) 
+                total_locals.append(metrics['train_total'])
+
+            self.stat_info["local_norm"].append(norm_list)
+            global_norm = sum(norm_list)/len(norm_list)
+            self.stat_info["global_norm"].append(global_norm)
+
+            self._train_on_sample_clients(loss_locals, acc_locals, total_locals, round_idx, len(client_indexes))
             
-            w_locals.append((client.get_sample_number(), copy.deepcopy(w_per)))
-            nabala_w.append((client.get_sample_number(), nabala))
-            
-            self.stat_info["sum_training_flops"] += training_flops
-            self.stat_info["sum_comm_params"] += num_comm_params
-            loss_locals.append(metrics['train_loss'])
-            acc_locals.append(metrics['train_correct']) 
-            total_locals.append(metrics['train_total'])
+            # 更新全局模型
+            nabala_w_global = self._aggregate(nabala_w)
+            w_global = {k: last_w_global[k] + nabala_w_global[k] for k in w_global.keys()}
 
-        self.stat_info["local_norm"].append(norm_list)
-        global_norm = sum(norm_list)/len(norm_list)
-        self.stat_info["global_norm"].append(global_norm)
+            # 测试
+            self._test_on_all_clients(w_global, round_idx)
 
-        self._train_on_sample_clients(loss_locals, acc_locals, total_locals, round_idx, len(client_indexes))
-        
-        # 更新全局模型
-        nabala_w_global = self._aggregate(nabala_w)
-        w_global = {k: last_w_global[k] + nabala_w_global[k] for k in w_global.keys()}
+            # 定期保存和输出结果
+            if round_idx % 50 == 0 or round_idx == self.args.comm_round - 1:
+                self._save_and_print_results(round_idx, exper_index, w_global)
+                
+            # 定期清理GPU缓存
+            if round_idx % 10 == 0:
+                torch.cuda.empty_cache()
 
-        # 测试
-        self._test_on_all_clients(w_global, round_idx)
 
-        # 定期保存和输出结果
-        if round_idx % 50 == 0 or round_idx == self.args.comm_round - 1:
-            self._save_and_print_results(round_idx, exper_index, w_global)
-            
-        # 定期清理GPU缓存
-        if round_idx % 10 == 0:
-            torch.cuda.empty_cache()
+ 
 
 def _client_sampling(self, round_idx, client_num_in_total, client_num_per_round):
     if client_num_in_total == client_num_per_round:

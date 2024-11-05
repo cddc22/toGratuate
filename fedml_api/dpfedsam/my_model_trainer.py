@@ -55,7 +55,7 @@ class MyModelTrainer(ModelTrainer):
         base_optimizer = torch.optim.SGD
         optimizer = SAM(self.model.parameters(), base_optimizer, rho=args.rho, adaptive=args.adaptive, lr=args.lr* (args.lr_decay**round), momentum=args.momentum, weight_decay=args.wd)
         
-        for epoch in tqdm(range(args.epochs)):
+        for epoch in range(args.epochs):
             epoch_loss, epoch_acc = [], []
             for batch_idx, (x, labels) in enumerate(train_data):
                 x, labels = x.to(device), labels.to(device)

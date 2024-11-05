@@ -264,7 +264,7 @@ def init_stat_info(self):
     }
 
 @torch.no_grad()
-    def record_avg_inference_flops(self, w_global, mask_pers=None):
+def record_avg_inference_flops(self, w_global, mask_pers=None):
         inference_flops = []
         for client_idx in range(self.args.client_num_in_total):
             if mask_pers is None:
@@ -279,16 +279,16 @@ def init_stat_info(self):
         avg_inference_flops = sum(inference_flops) / len(inference_flops)
         return avg_inference_flops
 
-    def _to_device(self, data):
+def _to_device(self, data):
         """Helper function to move data to device"""
         if isinstance(data, (list, tuple)):
             return [self._to_device(x) for x in data]
         return data.to(self.device, non_blocking=True)
 
-    def _clean_gpu_memory(self):
+def _clean_gpu_memory(self):
         """Helper function to clean GPU memory"""
         torch.cuda.empty_cache()
         
-    def get_stat_info(self):
+def get_stat_info(self):
         """Return training statistics"""
         return self.stat_info

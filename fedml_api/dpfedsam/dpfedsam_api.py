@@ -239,17 +239,19 @@ def _save_and_print_results(self, round_idx, exper_index, w_global):
     self.logger.info('global_test_loss={}'.format(self.stat_info["global_test_loss"]))
     self.logger.info('global_test_acc={}'.format(self.stat_info["global_test_acc"]))
 
-def init_stat_info(self):
-    self.stat_info = {
-        "sum_training_flops": 0,
-        "sum_comm_params": 0,
-        "global_train_loss": [],
-        "global_train_acc": [],
-        "global_test_loss": [],
-        "global_test_acc": [],
-        "local_norm": [],
-        "global_norm": []
-    }
+    def init_stat_info(self):
+        self.stat_info = {}
+        self.stat_info["sum_comm_params"] = 0
+        self.stat_info["sum_training_flops"] = 0
+        self.stat_info["avg_inference_flops"] = 0
+        self.stat_info["global_train_acc"] = []
+        self.stat_info["global_train_loss"] = []
+        self.stat_info["global_test_acc"] = []
+        self.stat_info["global_test_loss"] = []
+        self.stat_info["person_test_acc"] = []
+        self.stat_info["final_masks"] = []
+        self.stat_info["global_norm"] = []
+        self.stat_info["local_norm"] = []
 
 @torch.no_grad()
 def record_avg_inference_flops(self, w_global, mask_pers=None):

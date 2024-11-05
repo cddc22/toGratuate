@@ -15,33 +15,19 @@ import os
 
 class DPFedSAMAPI(object):
     def __init__(self, dataset, device, args, model_trainer, logger):
-        self.logger = logger
-        self.device = device
-        self.args = args
+
         
         # 启用 cudnn benchmark
         cudnn.benchmark = True
         cudnn.deterministic = False
-        
+
+        self.logger = logger
+        self.device = device
+        self.args = args
         [train_data_num, test_data_num, train_data_global, test_data_global,
          train_data_local_num_dict, train_data_local_dict, test_data_local_dict, class_num] = dataset
-         
-        # 配置数据加载器
-        self.train_global = DataLoader(
-            train_data_global,
-            batch_size=self.args.batch_size,
-            shuffle=True,
-            num_workers=4,
-            pin_memory=True
-        )
-        self.test_global = DataLoader(
-            test_data_global,
-            batch_size=self.args.batch_size,
-            shuffle=False,
-            num_workers=4,
-            pin_memory=True
-        )
-        
+        self.train_global = train_data_global
+        self.test_global = test_data_global
         self.val_global = None
         self.train_data_num_in_total = train_data_num
         self.test_data_num_in_total = test_data_num
@@ -52,6 +38,8 @@ class DPFedSAMAPI(object):
         self.model_trainer = model_trainer
         self._setup_clients(train_data_local_num_dict, train_data_local_dict, test_data_local_dict, model_trainer)
         self.init_stat_info()
+
+
 
     def _setup_clients(self, train_data_local_num_dict, train_data_local_dict, test_data_local_dict, model_trainer):
         self.logger.info("############setup_clients (START)#############")

@@ -5,6 +5,7 @@ import random
 import pdb
 import numpy as np
 import torch
+from tqdm import tqdm
 
 from fedml_api.model.cv.resnet import  customized_resnet18
 from fedml_api.dpfedsam.client import Client
@@ -43,7 +44,7 @@ class DPFedSAMAPI(object):
         nabala_w_global = copy.deepcopy(subtract(w_global, w_global ))
 
         self.logger.info("################Exper times: {}".format(exper_index))
-        for round_idx in range(self.args.comm_round):
+        for round_idx in tqdm(range(self.args.comm_round)):
             w_locals = []
             w_locals, nabala_w = [], []
             last_w_global = copy.deepcopy(w_global)

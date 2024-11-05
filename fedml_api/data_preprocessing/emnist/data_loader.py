@@ -76,9 +76,9 @@ def dirichlet_cifar_noniid(degree_noniid, dataset, num_users):
 
 def load_partition_data_emnist( data_dir, partition_method, partition_alpha, client_number, batch_size, logger):
     transform_train, transform_test = _data_transforms_emnist()
-    dataset_train = EMNIST(data_dir, train=True, download=False,
+    dataset_train = EMNIST(data_dir, train=True, download=True,
                         transform=transform_train, split = 'letters')
-    dataset_test = EMNIST(data_dir, train=False, download=False,
+    dataset_test = EMNIST(data_dir, train=False, download=True,
                         transform=transform_test, split = 'letters')
 
 

@@ -5,8 +5,9 @@ import random
 import pdb
 import numpy as np
 import torch
-from tqdm import tqdm
-from concurrent.futures import ThreadPoolExecutor  # 用于并行化操作
+import torch.backends.cudnn as cudnn
+from torch.cuda.amp import autocast, GradScaler
+from torch.utils.data import DataLoader
 
 from fedml_api.model.cv.resnet import customized_resnet18
 from fedml_api.dpfedsam.client import Client
@@ -17,10 +18,30 @@ class DPFedSAMAPI(object):
         self.logger = logger
         self.device = device
         self.args = args
+        
+        # 启用 cudnn benchmark
+        cudnn.benchmark = True
+        cudnn.deterministic = False
+        
         [train_data_num, test_data_num, train_data_global, test_data_global,
          train_data_local_num_dict, train_data_local_dict, test_data_local_dict, class_num] = dataset
-        self.train_global = train_data_global
-        self.test_global = test_data_global
+         
+        # 配置数据加载器
+        self.train_global = DataLoader(
+            train_data_global,
+            batch_size=self.args.batch_size,
+            shuffle=True,
+            num_workers=4,
+            pin_memory=True
+        )
+        self.test_global = DataLoader(
+            test_data_global,
+            batch_size=self.args.batch_size,
+            shuffle=False,
+            num_workers=4,
+            pin_memory=True
+        )
+        
         self.val_global = None
         self.train_data_num_in_total = train_data_num
         self.test_data_num_in_total = test_data_num
@@ -36,208 +57,236 @@ class DPFedSAMAPI(object):
         self.logger.info("############setup_clients (START)#############")
         for client_idx in range(self.args.client_num_in_total):
             c = Client(client_idx, train_data_local_dict[client_idx], test_data_local_dict[client_idx],
-                       train_data_local_num_dict[client_idx], self.args, self.device, model_trainer, self.logger)
+                      train_data_local_num_dict[client_idx], self.args, self.device, model_trainer, self.logger)
             self.client_list.append(c)
         self.logger.info("############setup_clients (END)#############")
 
     def train(self, exper_index):
-        w_global = self.model_trainer.get_model_params().to(self.device)
-        nabala_w_global = copy.deepcopy(subtract(w_global, w_global)).to(self.device)
+        # 初始化混合精度训练
+        scaler = GradScaler()
+        
+        w_global = self.model_trainer.get_model_params()
+        w_global = {k: v.to(self.device) for k,v in w_global.items()}
+        nabala_w_global = {k: torch.zeros_like(v) for k,v in w_global.items()}
 
         self.logger.info("################Exper times: {}".format(exper_index))
-        for round_idx in tqdm(range(self.args.comm_round)):
-            w_locals, nabala_w = [], []
+        
+        for round_idx in range(self.args.comm_round):
+            w_locals = []
+            nabala_w = []
             last_w_global = copy.deepcopy(w_global)
 
-            # 客户端采样
             client_indexes = self._client_sampling(round_idx, self.args.client_num_in_total,
-                                                   self.args.client_num_per_round)
+                                                self.args.client_num_per_round)
             client_indexes = np.sort(client_indexes)
 
             loss_locals, acc_locals, total_locals = [], [], []
             norm_list = []
-
-            # 并行化客户端训练
-            with ThreadPoolExecutor(max_workers=self.args.client_num_per_round) as executor:
-                futures = []
-                for cur_clnt in client_indexes:
-                    client = self.client_list[cur_clnt]
-                    futures.append(executor.submit(client.train, copy.deepcopy(w_global), round_idx))
-
-                # 收集并行训练结果
-                for future in futures:
-                    w_per, training_flops, num_comm_params, metrics = future.result()
-
-                    nabala = copy.deepcopy(subtract(w_per, w_global))
-                    norm = 0.0
-                    for name in nabala.keys():
-                        # 计算并添加噪声
-                        norm += pow(nabala[name].norm(2), 2)
-                        noise = torch.cuda.FloatTensor(nabala[name].shape).normal_(
-                            0, self.args.sigma * self.args.C / np.sqrt(self.args.client_num_per_round)).to(self.device)
-                        nabala[name] *= min(1, self.args.C / torch.norm(nabala[name], 2))
-                        nabala[name] = nabala[name].add_(noise)
-
-                    total_norm = np.sqrt(norm).item()
-                    norm_list.append(total_norm)
-
-                    w_per = copy.deepcopy(add(nabala, w_global))
-                    w_locals.append((client.get_sample_number(), copy.deepcopy(w_per)))
-                    nabala_w.append((client.get_sample_number(), nabala))
-
-                    self.stat_info["sum_training_flops"] += training_flops
-                    self.stat_info["sum_comm_params"] += num_comm_params
-                    loss_locals.append(metrics['train_loss'])
-                    acc_locals.append(metrics['train_correct'])
-                    total_locals.append(metrics['train_total'])
-
-            self.stat_info["local_norm"].append(norm_list)
-            global_norm = sum(norm_list) / len(norm_list)
-            self.stat_info["global_norm"].append(global_norm)
-            # 更新统计信息
-            self._train_on_sample_clients(loss_locals, acc_locals, total_locals, round_idx, len(client_indexes))
             
-            # 聚合客户端更新，更新全局模型
-            nabala_w_global = self._aggregate(nabala_w)
-            w_global = copy.deepcopy(add(last_w_global, nabala_w_global))
-
-            # 测试全局模型
-            self._test_on_all_clients(w_global, round_idx)
-
-            # 每50轮或者最后一轮输出一次训练和测试结果
-            if round_idx % 50 == 0 or round_idx == self.args.comm_round - 1:
-                print('global_train_loss={}'.format(self.stat_info["global_train_loss"]))
-                print('global_train_acc={}'.format(self.stat_info["global_train_acc"]))
-                print('global_test_loss={}'.format(self.stat_info["global_test_loss"]))
-                print('global_test_acc={}'.format(self.stat_info["global_test_acc"]))
-
-                self.logger.info("################Communication round : {}".format(round_idx))
+            for cur_clnt in client_indexes:
+            client = self.client_list[cur_clnt]
+            
+            # 使用混合精度训练
+            with autocast():
+                w_per, training_flops, num_comm_params, metrics = client.train(copy.deepcopy(w_global), round_idx)
+            
+            # 计算本地更新并添加DP噪声
+            nabala = {k: (w_per[k] - w_global[k]).to(self.device) for k in w_per.keys()}
+            
+            norm = 0.0
+            for name in nabala.keys():
+                norm += pow(nabala[name].norm(2), 2)
                 
-                if round_idx % 200 == 0 or round_idx == self.args.comm_round - 1:
-                    self.logger.info("################The final results, Experiment times: {}".format(exper_index))
+                # 生成噪声并移至GPU
+                noise = torch.normal(
+                    0, 
+                    self.args.sigma * self.args.C /np.sqrt(self.args.client_num_per_round),
+                    nabala[name].shape,
+                    device=self.device
+                )
+                
+                # 裁剪和添加噪声
+                nabala[name] *= min(1, self.args.C/torch.norm(nabala[name], 2))
+                nabala[name].add_(noise)
 
-                    #np.array(self.stat_info["local_norm"]).dump(f"{os.getcwd()}/LOG/cifar10/dumps/local_norm_dpfedsam_{self.args.p}_.dat")
-                    np.array(self.stat_info["local_norm"]).dump("toGratuate/LOG/cifar10/dumps/local_norm_dpfedsam_{self.args.p}_.dat")
+            total_norm = torch.sqrt(norm).cpu().numpy().reshape(1)
+            norm_list.append(total_norm[0])
 
-                    if self.args.dataset == "cifar10":
-                        model = customized_resnet18(10)
-                        model.load_state_dict(copy.deepcopy(w_global))
-                        model_save_path = f"{os.getcwd()}/save_model/dp-fedsam_threshold{self.args.C}_rho{self.args.rho}_spar_rand_p{self.args.p}.pth.tar" if self.args.spar_rand \
-                            else f"{os.getcwd()}/save_model/dp-fedsam_threshold{self.args.C}_rho{self.args.rho}_spar_topk_p{self.args.p}.pth.tar"
-                        torch.save(model, model_save_path)
+            w_per = {k: w_global[k] + nabala[k] for k in w_global.keys()}
+            
+            w_locals.append((client.get_sample_number(), copy.deepcopy(w_per)))
+            nabala_w.append((client.get_sample_number(), nabala))
+            
+            self.stat_info["sum_training_flops"] += training_flops
+            self.stat_info["sum_comm_params"] += num_comm_params
+            loss_locals.append(metrics['train_loss'])
+            acc_locals.append(metrics['train_correct']) 
+            total_locals.append(metrics['train_total'])
 
-                self.logger.info('local_norm = {}'.format(self.stat_info["local_norm"]))
-                self.logger.info('global_norm = {}'.format(self.stat_info["global_norm"]))
-                self.logger.info('global_train_loss={}'.format(self.stat_info["global_train_loss"]))
-                self.logger.info('global_train_acc={}'.format(self.stat_info["global_train_acc"]))
-                self.logger.info('global_test_loss={}'.format(self.stat_info["global_test_loss"]))
-                self.logger.info('global_test_acc={}'.format(self.stat_info["global_test_acc"]))
+        self.stat_info["local_norm"].append(norm_list)
+        global_norm = sum(norm_list)/len(norm_list)
+        self.stat_info["global_norm"].append(global_norm)
 
-    def _client_sampling(self, round_idx, client_num_in_total, client_num_per_round):
-        if client_num_in_total == client_num_per_round:
-            client_indexes = [client_index for client_index in range(client_num_in_total)]
-        else:
-            num_clients = min(client_num_per_round, client_num_in_total)
-            np.random.seed(round_idx)  # 确保每一轮选择的客户端相同
-            client_indexes = np.random.choice(range(client_num_in_total), num_clients, replace=False)
-        self.logger.info("client_indexes = %s" % str(client_indexes))
-        return client_indexes
+        self._train_on_sample_clients(loss_locals, acc_locals, total_locals, round_idx, len(client_indexes))
+        
+        # 更新全局模型
+        nabala_w_global = self._aggregate(nabala_w)
+        w_global = {k: last_w_global[k] + nabala_w_global[k] for k in w_global.keys()}
 
-    def _aggregate(self, w_locals):
-        training_num = sum([sample_num for sample_num, _ in w_locals])
-        w_global = {}
-        for k in w_locals[0][1].keys():
-            w_global[k] = torch.zeros_like(w_locals[0][1][k]).to(self.device)
-            for local_sample_number, local_model_params in w_locals:
-                w = local_sample_number / training_num
-                w_global[k] += local_model_params[k].to(self.device) * w
-        return w_global
+        # 测试
+        self._test_on_all_clients(w_global, round_idx)
 
-    def _train_on_sample_clients(self, loss_locals, acc_locals, total_locals, round_idx, client_sample_number):
-        self.logger.info("################global_train_on_all_clients : {}".format(round_idx))
-        g_train_acc = sum([np.array(acc_locals[i]) / np.array(total_locals[i]) for i in range(client_sample_number)]) / client_sample_number
-        g_train_loss = sum([np.array(loss_locals[i]) / np.array(total_locals[i]) for i in range(client_sample_number)]) / client_sample_number
+        # 定期保存和输出结果
+        if round_idx % 50 == 0 or round_idx == self.args.comm_round - 1:
+            self._save_and_print_results(round_idx, exper_index, w_global)
+            
+        # 定期清理GPU缓存
+        if round_idx % 10 == 0:
+            torch.cuda.empty_cache()
 
-        print('The averaged global_train_acc:{}, global_train_loss:{}'.format(g_train_acc, g_train_loss))
-        stats = {'The averaged global_train_acc': g_train_acc, 'global_train_loss': g_train_loss}
-        self.stat_info["global_train_acc"].append(g_train_acc)
-        self.stat_info["global_train_loss"].append(g_train_loss)
-        self.logger.info(stats)
+def _client_sampling(self, round_idx, client_num_in_total, client_num_per_round):
+    if client_num_in_total == client_num_per_round:
+        client_indexes = list(range(client_num_in_total))
+    else:
+        num_clients = min(client_num_per_round, client_num_in_total)
+        np.random.seed(round_idx)
+        client_indexes = np.random.choice(range(client_num_in_total), num_clients, replace=False)
+    self.logger.info("client_indexes = %s" % str(client_indexes))
+    return client_indexes
 
-    def _test_on_all_clients(self, w_global, round_idx):
-        self.logger.info("################global_test_on_all_clients : {}".format(round_idx))
-        g_test_metrics = {
-            'num_samples': [],
-            'num_correct': [],
-            'losses': []
-        }
+def _aggregate(self, w_locals):
+    training_num = sum(sample_num for sample_num, _ in w_locals)
+    
+    w_global = {}
+    for k in w_locals[0][1].keys():
+        w_global[k] = torch.zeros_like(w_locals[0][1][k], device=self.device)
+        for sample_num, local_params in w_locals:
+            w = sample_num / training_num
+            w_global[k] += local_params[k] * w
+    return w_global
 
-        # 使用线程池并行化客户端测试
-        with ThreadPoolExecutor(max_workers=self.args.client_num_per_round) as executor:
-            futures = []
-            for client_idx in range(self.args.client_num_in_total):
-                client = self.client_list[client_idx]
-                futures.append(executor.submit(client.local_test, w_global, True))
+def _train_on_sample_clients(self, loss_locals, acc_locals, total_locals, round_idx, client_sample_number):
+    self.logger.info("################global_train_on_all_clients : {}".format(round_idx))
 
-            # 收集测试结果
-            for future in futures:
-                g_test_local_metrics = future.result()
-                g_test_metrics['num_samples'].append(g_test_local_metrics['test_total'])
-                g_test_metrics['num_correct'].append(g_test_local_metrics['test_correct'])
-                g_test_metrics['losses'].append(g_test_local_metrics['test_loss'])
+    # 使用 torch 计算平均值以提高效率
+    g_train_acc = torch.mean(torch.tensor([acc/total for acc, total in zip(acc_locals, total_locals)]))
+    g_train_loss = torch.mean(torch.tensor([loss/total for loss, total in zip(loss_locals, total_locals)]))
 
-                # 如果在 CI 环境中，只测试一个客户端以节省时间
-                if self.args.ci == 1:
-                    break
+    print('The averaged global_train_acc:{}, global_train_loss:{}'.format(g_train_acc, g_train_loss))
+    stats = {'The averaged global_train_acc': g_train_acc.item(), 'global_train_loss': g_train_loss.item()}
+    self.stat_info["global_train_acc"].append(g_train_acc.item())
+    self.stat_info["global_train_loss"].append(g_train_loss.item())
+    self.logger.info(stats)
 
-        # 计算全局测试精度和损失
-        g_test_acc = sum([np.array(g_test_metrics['num_correct'][i]) / np.array(g_test_metrics['num_samples'][i]) 
-                          for i in range(self.args.client_num_in_total)]) / self.args.client_num_in_total
-        g_test_loss = sum([np.array(g_test_metrics['losses'][i]) / np.array(g_test_metrics['num_samples'][i]) 
-                           for i in range(self.args.client_num_in_total)]) / self.args.client_num_in_total
+def _test_on_all_clients(self, w_global, round_idx):
+    self.logger.info("################global_test_on_all_clients : {}".format(round_idx))
+    
+    g_test_metrics = {
+        'num_samples': [],
+        'num_correct': [],
+        'losses': []
+    }
 
-        stats = {'global_test_acc': g_test_acc, 'global_test_loss': g_test_loss}
-        self.stat_info["global_test_acc"].append(g_test_acc)
-        self.stat_info["global_test_loss"].append(g_test_loss)
-        self.logger.info(stats)
+    for client_idx in range(self.args.client_num_in_total):
+        client = self.client_list[client_idx]
+        g_test_local_metrics = client.local_test(w_global, True)
+        
+        g_test_metrics['num_samples'].append(g_test_local_metrics['test_total'])
+        g_test_metrics['num_correct'].append(g_test_local_metrics['test_correct'])
+        g_test_metrics['losses'].append(g_test_local_metrics['test_loss'])
 
+        if self.args.ci == 1:
+            break
+
+    # 使用 torch 计算平均值
+    g_test_acc = torch.mean(torch.tensor([correct/total for correct, total in 
+                           zip(g_test_metrics['num_correct'], g_test_metrics['num_samples'])]))
+    g_test_loss = torch.mean(torch.tensor([loss/total for loss, total in 
+                            zip(g_test_metrics['losses'], g_test_metrics['num_samples'])]))
+
+    stats = {'global_test_acc': g_test_acc.item(), 'global_test_loss': g_test_loss.item()}
+    self.stat_info["global_test_acc"].append(g_test_acc.item())
+    self.stat_info["global_test_loss"].append(g_test_loss.item())
+    self.logger.info(stats)
+
+def _save_and_print_results(self, round_idx, exper_index, w_global):
+    print('global_train_loss={}'.format(self.stat_info["global_train_loss"]))
+    print('global_train_acc={}'.format(self.stat_info["global_train_acc"]))
+    print('global_test_loss={}'.format(self.stat_info["global_test_loss"]))
+    print('global_test_acc={}'.format(self.stat_info["global_test_acc"]))
+    
+    self.logger.info("################Communication round : {}".format(round_idx))
+    
+    if round_idx % 200 == 0 or round_idx == self.args.comm_round-1:
+        self.logger.info("################The final results, Experiment times: {}".format(exper_index))
+        
+        # 保存本地范数
+        save_path = os.path.join("./LOG/cifar10/dumps", f"local_norm_dpfedsam_{self.args.p}_.dat")
+        np.array(self.stat_info["local_norm"]).dump(save_path)
+        
+        # 保存模型
+        if self.args.dataset == "cifar10":
+            model = customized_resnet18(10)
+            model.load_state_dict(copy.deepcopy(w_global))
+            model = model.to(self.device)
+            
+            save_dir = f"{os.getcwd()}/save_model"
+            os.makedirs(save_dir, exist_ok=True)
+            
+            if self.args.spar_rand:
+                model_path = os.path.join(save_dir, 
+                    f"dp-fedsam_threshold{self.args.C}_rho{self.args.rho}_spar_rand_p{self.args.p}.pth.tar")
+            else:
+                model_path = os.path.join(save_dir,
+                    f"dp-fedsam_threshold{self.args.C}_rho{self.args.rho}_spar_topk_p{self.args.p}.pth.tar")
+                
+            torch.save(model, model_path)
+
+    self.logger.info('local_norm = {}'.format(self.stat_info["local_norm"]))
+    self.logger.info('global_norm = {}'.format(self.stat_info["global_norm"]))
+    self.logger.info('global_train_loss={}'.format(self.stat_info["global_train_loss"]))
+    self.logger.info('global_train_acc={}'.format(self.stat_info["global_train_acc"]))
+    self.logger.info('global_test_loss={}'.format(self.stat_info["global_test_loss"]))
+    self.logger.info('global_test_acc={}'.format(self.stat_info["global_test_acc"]))
+
+def init_stat_info(self):
+    self.stat_info = {
+        "sum_training_flops": 0,
+        "sum_comm_params": 0,
+        "global_train_loss": [],
+        "global_train_acc": [],
+        "global_test_loss": [],
+        "global_test_acc": [],
+        "local_norm": [],
+        "global_norm": []
+    }
+
+@torch.no_grad()
     def record_avg_inference_flops(self, w_global, mask_pers=None):
         inference_flops = []
         for client_idx in range(self.args.client_num_in_total):
             if mask_pers is None:
-                inference_flops += [self.model_trainer.count_inference_flops(w_global)]
+                inference_flops.append(self.model_trainer.count_inference_flops(w_global))
             else:
-                inference_flops += [self.model_trainer.count_inference_flops(w_global, mask_pers[client_idx])]
-        avg_flops = np.mean(inference_flops)
-        return avg_flops
+                w_per = {
+                    name: w_global[name] * mask_pers[client_idx][name] 
+                    for name in mask_pers[client_idx]
+                }
+                inference_flops.append(self.model_trainer.count_inference_flops(w_per))
+                
+        avg_inference_flops = sum(inference_flops) / len(inference_flops)
+        return avg_inference_flops
 
-    def init_stat_info(self):
-        self.stat_info = {
-            "global_train_loss": [],
-            "global_train_acc": [],
-            "global_test_loss": [],
-            "global_test_acc": [],
-            "sum_training_flops": 0,
-            "sum_comm_params": 0,
-            "local_norm": [],
-            "global_norm": []
-        }
+    def _to_device(self, data):
+        """Helper function to move data to device"""
+        if isinstance(data, (list, tuple)):
+            return [self._to_device(x) for x in data]
+        return data.to(self.device, non_blocking=True)
 
-# Helper functions
-def subtract(w1, w2):
-    """
-    Subtracts the parameters of two models, w1 - w2
-    """
-    result = {}
-    for key in w1.keys():
-        result[key] = w1[key] - w2[key]
-    return result
-
-def add(w1, w2):
-    """
-    Adds the parameters of two models, w1 + w2
-    """
-    result = {}
-    for key in w1.keys():
-        result[key] = w1[key] + w2[key]
-    return result
+    def _clean_gpu_memory(self):
+        """Helper function to clean GPU memory"""
+        torch.cuda.empty_cache()
+        
+    def get_stat_info(self):
+        """Return training statistics"""
+        return self.stat_info

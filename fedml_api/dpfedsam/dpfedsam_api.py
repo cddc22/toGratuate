@@ -116,7 +116,8 @@ class DPFedSAMAPI(object):
                     self.logger.info("################The final results, Experiment times: {}".format(exper_index))
                     # self.logger.info('local_norm = {}'.format(self.stat_info["local_norm"]))
                     #np.array(self.stat_info["local_norm"]).dump("{os.getcwd()}/LOG/cifar10/dumps/local_norm_dpfedsam_{self.args.p}_.dat")
-                    np.array(self.stat_info["local_norm"]).dump("{}/LOG/cifar10/dumps/local_norm_dpfedsam_{}.dat".format(os.getcwd(), self.args.p))
+                    #np.array(self.stat_info["local_norm"]).dump("{}/LOG/cifar10/dumps/local_norm_dpfedsam_{self.args.p}.dat".format(os.getcwd()))
+                    np.array(self.stat_info["local_norm"]).dump(f"{os.getcwd()}/LOG/cifar10/dumps/local_norm_dpfedsam_{self.args.p}_.dat")
                     if self.args.dataset ==  "cifar10":
                         model = customized_resnet18(10)
                         model.load_state_dict(copy.deepcopy(w_global)) 

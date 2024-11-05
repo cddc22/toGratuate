@@ -8,6 +8,7 @@ import torch
 import torch.backends.cudnn as cudnn
 from torch.amp import autocast, GradScaler  # 更新导入语句
 from torch.utils.data import DataLoader
+from fedml_api.dpfedsam.client import Client
 
 class DPFedSAMAPI(object):
     def __init__(self, dataset, device, args, model_trainer, logger):

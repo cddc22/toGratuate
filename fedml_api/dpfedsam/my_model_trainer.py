@@ -100,11 +100,14 @@ class MyModelTrainer(ModelTrainer):
             self.scaler.scale(loss).backward()
         else:
             loss.backward()
-        torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)  # 加入梯度裁剪
+        
 
 
 
         self.optimizer.first_step(zero_grad=True)
+
+        torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)  # 加入梯度裁剪
+        
 
         # 第二次优化步骤
         with autocast('cuda',enabled=bool(self.scaler)):

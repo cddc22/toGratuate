@@ -118,7 +118,7 @@ class DPFedSAMAPI(object):
                     # self.logger.info('local_norm = {}'.format(self.stat_info["local_norm"]))
                     # 动态设置文件名
                     filename = f"local_norm_dpfedsam_{self.args.p}.dat" if hasattr(self.args, 'p') else "local_norm_dpfedsam_.dat"
-                    output_dir = os.path.join(os.getcwd(), "LOG/cifar10/dumps/toGratuate")
+                    output_dir = os.path.join(os.getcwd()+'/toGratuate', "LOG/cifar10/dumps")
                     np.array(self.stat_info["local_norm"]).dump(os.path.join(output_dir, filename))
 
                     #np.array(self.stat_info["local_norm"]).dump("LOG/cifar10/dumps/local_norm_dpfedsam_.dat")

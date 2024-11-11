@@ -96,7 +96,14 @@ class MyModelTrainer(ModelTrainer):
             loss = criterion(pred, labels.long())
 
         # 第一次优化步骤
-        self.scaler.scale(loss).backward() if self.scaler else loss.backward()
+        if self.scaler:
+            self.scaler.scale(loss).backward()
+        else:
+            loss.backward()
+        torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)  # 加入梯度裁剪
+
+
+
         self.optimizer.first_step(zero_grad=True)
 
         # 第二次优化步骤

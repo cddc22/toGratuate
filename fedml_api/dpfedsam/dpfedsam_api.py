@@ -127,10 +127,10 @@ class DPFedSAMAPI(object):
                     if self.args.dataset ==  "cifar10":
                         model = customized_resnet18(10)
                         model.load_state_dict(copy.deepcopy(w_global))
-                        if getattr(self.args, 'spar_rand', False):
-                            torch.save(model, f"{os.getcwd()}/save_model/dp-fedsam_threshold{self.args.C}_rho{self.args.rho}_spar_rand_p.pth.tar")
-                        else:
-                            torch.save(model, f"{os.getcwd()}/save_model/dp-fedsam_threshold{self.args.C}_rho{self.args.rho}_spar_topk_p.pth.tar")
+                        # if getattr(self.args, 'spar_rand', False):
+                        #     torch.save(model, f"{os.getcwd()}/save_model/dp-fedsam_threshold{self.args.C}_rho{self.args.rho}_spar_rand_p.pth.tar")
+                        # else:
+                        #     torch.save(model, f"{os.getcwd()}/save_model/dp-fedsam_threshold{self.args.C}_rho{self.args.rho}_spar_topk_p.pth.tar")
 
 # if self.args.spar_rand == True:
                         #     torch.save(model,f"{os.getcwd()}/save_model/dp-fedsam_threshold{self.args.C}_rho{self.args.rho}_spar_rand_p{self.args.p}.pth.tar")

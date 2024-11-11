@@ -116,7 +116,12 @@ class DPFedSAMAPI(object):
                 if round_idx % 200 == 0 or round_idx == self.args.comm_round-1:
                     self.logger.info("################The final results, Experiment times: {}".format(exper_index))
                     # self.logger.info('local_norm = {}'.format(self.stat_info["local_norm"]))
-                    np.array(self.stat_info["local_norm"]).dump("LOG/cifar10/dumps/local_norm_dpfedsam_.dat")
+                    # 动态设置文件名
+                    filename = f"local_norm_dpfedsam_{self.args.p}.dat" if hasattr(self.args, 'p') else "local_norm_dpfedsam_.dat"
+                    output_dir = os.path.join(os.getcwd(), "LOG/cifar10/dumps")
+                    np.array(self.stat_info["local_norm"]).dump(os.path.join(output_dir, filename))
+
+                    #np.array(self.stat_info["local_norm"]).dump("LOG/cifar10/dumps/local_norm_dpfedsam_.dat")
                     #np.array(self.stat_info["local_norm"]).dump("{}/LOG/cifar10/dumps/local_norm_dpfedsam_{self.args.p}.dat".format(os.getcwd()))
                     #np.array(self.stat_info["local_norm"]).dump(f"{os.getcwd()}/LOG/cifar10/dumps/local_norm_dpfedsam_{self.args.p}_.dat")
                     if self.args.dataset ==  "cifar10":

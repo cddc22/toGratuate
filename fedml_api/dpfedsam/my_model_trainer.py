@@ -90,6 +90,9 @@ class MyModelTrainer(ModelTrainer):
 
         with autocast('cuda',enabled=bool(self.scaler)):  # 使用混合精度
             pred = self.model(x)
+            if torch.isnan(pred).any():
+                print("Model output contains NaN values.")
+                return {'correct': 0, 'loss': 0, 'total': 0}
             loss = criterion(pred, labels.long())
 
         # 第一次优化步骤

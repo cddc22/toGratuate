@@ -3,7 +3,7 @@ import logging
 import torch
 import torch.distributed as dist
 
-from .utils import disable_running_stats, enable_running_stats
+from utils import disable_running_stats, enable_running_stats
 
 logger = logging.getLogger(__name__)
 

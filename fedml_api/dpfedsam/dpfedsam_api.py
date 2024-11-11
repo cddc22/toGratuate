@@ -52,7 +52,7 @@ class DPFedSAMAPI(object):
             for scalability: following the original FedAvg algorithm, we uniformly sample a fraction of clients in each round.
             """
             client_indexes = self._client_sampling(round_idx, self.args.client_num_in_total,
-                                                self.args.client_num_per_round)
+                                                   self.args.client_num_per_round)
             client_indexes = np.sort(client_indexes)
 
             # self.logger.info("client_indexes = " + str(client_indexes))
@@ -66,7 +66,7 @@ class DPFedSAMAPI(object):
                 w_per,training_flops,num_comm_params, metrics = client.train(copy.deepcopy(w_global), round_idx)
                 # calculate the local update of each participated client
                 nabala = copy.deepcopy(subtract(w_per, w_global))
-                # initialize the norm 
+                # initialize the norm
                 norm = 0.0
                 ###### add client-level DP noise ##############
                 for name in nabala.keys():
@@ -97,14 +97,14 @@ class DPFedSAMAPI(object):
             self.stat_info["global_norm"].append(global_norm)
             # print('global_norm = {}'.format(self.stat_info["global_norm"]))
             # print('local_norm = {}'.format(self.stat_info["local_norm"]))
-            
+
 
             self._train_on_sample_clients(loss_locals, acc_locals, total_locals, round_idx, len(client_indexes))
             # update global meta weights
             nabala_w_global = self._aggregate(nabala_w)
             w_global = copy.deepcopy(add(last_w_global, nabala_w_global))
 
-            
+
             self._test_on_all_clients(w_global, round_idx)
 
             if round_idx % 50 == 0 or round_idx == self.args.comm_round -1 :
@@ -116,16 +116,21 @@ class DPFedSAMAPI(object):
                 if round_idx % 200 == 0 or round_idx == self.args.comm_round-1:
                     self.logger.info("################The final results, Experiment times: {}".format(exper_index))
                     # self.logger.info('local_norm = {}'.format(self.stat_info["local_norm"]))
-                    np.array(self.stat_info["local_norm"]).dump("toGratuate/LOG/cifar10/dumps/local_norm_dpfedsam_{self.args.p}_.dat")
+                    np.array(self.stat_info["local_norm"]).dump("LOG/cifar10/dumps/local_norm_dpfedsam_{self.args.p}_.dat")
                     #np.array(self.stat_info["local_norm"]).dump("{}/LOG/cifar10/dumps/local_norm_dpfedsam_{self.args.p}.dat".format(os.getcwd()))
                     #np.array(self.stat_info["local_norm"]).dump(f"{os.getcwd()}/LOG/cifar10/dumps/local_norm_dpfedsam_{self.args.p}_.dat")
                     if self.args.dataset ==  "cifar10":
                         model = customized_resnet18(10)
-                        model.load_state_dict(copy.deepcopy(w_global)) 
+                        model.load_state_dict(copy.deepcopy(w_global))
                         if getattr(self.args, 'spar_rand', False):
-                            torch.save(model,f"{os.getcwd()}/save_model/dp-fedsam_threshold{self.args.C}_rho{self.args.rho}_spar_rand_p{self.args.p}.pth.tar")
+                            torch.save(model, f"{os.getcwd()}/save_model/dp-fedsam_threshold{self.args.C}_rho{self.args.rho}_spar_rand_p.pth.tar")
                         else:
-                            torch.save(model,f"{os.getcwd()}/save_model/dp-fedsam_threshold{self.args.C}_rho{self.args.rho}_spar_topk_p{self.args.p}.pth.tar")
+                            torch.save(model, f"{os.getcwd()}/save_model/dp-fedsam_threshold{self.args.C}_rho{self.args.rho}_spar_topk_p.pth.tar")
+
+# if self.args.spar_rand == True:
+                        #     torch.save(model,f"{os.getcwd()}/save_model/dp-fedsam_threshold{self.args.C}_rho{self.args.rho}_spar_rand_p{self.args.p}.pth.tar")
+                        # else:
+                        #     torch.save(model,f"{os.getcwd()}/save_model/dp-fedsam_threshold{self.args.C}_rho{self.args.rho}_spar_topk_p{self.args.p}.pth.tar")
 
                 self.logger.info('local_norm = {}'.format(self.stat_info["local_norm"]))
                 self.logger.info('global_norm = {}'.format(self.stat_info["global_norm"]))
@@ -134,8 +139,8 @@ class DPFedSAMAPI(object):
                 self.logger.info('global_test_loss={}'.format(self.stat_info["global_test_loss"]))
                 self.logger.info('global_test_acc={}'.format(self.stat_info["global_test_acc"]))
 
-                
-        
+
+
 
 
     def _client_sampling(self, round_idx, client_num_in_total, client_num_per_round):
@@ -169,9 +174,9 @@ class DPFedSAMAPI(object):
         self.logger.info("################global_train_on_all_clients : {}".format(round_idx))
 
         g_train_acc = sum([np.array(acc_locals[i]) / np.array(total_locals[i]) for i in
-                        range(client_sample_number)]) / client_sample_number
+                           range(client_sample_number)]) / client_sample_number
         g_train_loss = sum([np.array(loss_locals[i]) / np.array(total_locals[i]) for i in
-                         range(client_sample_number)]) / client_sample_number
+                            range(client_sample_number)]) / client_sample_number
 
         print('The averaged global_train_acc:{}, global_train_loss:{}'.format(g_train_acc, g_train_loss))
         stats = {'The averaged global_train_acc': g_train_acc, 'global_train_loss': g_train_loss}
@@ -205,9 +210,9 @@ class DPFedSAMAPI(object):
 
         # test on test dataset
         g_test_acc = sum([np.array(g_test_metrics['num_correct'][i]) / np.array(g_test_metrics['num_samples'][i]) for i in
-                        range(self.args.client_num_in_total)]) / self.args.client_num_in_total
+                          range(self.args.client_num_in_total)]) / self.args.client_num_in_total
         g_test_loss = sum([np.array(g_test_metrics['losses'][i]) / np.array(g_test_metrics['num_samples'][i]) for i in
-                         range(self.args.client_num_in_total)]) / self.args.client_num_in_total
+                           range(self.args.client_num_in_total)]) / self.args.client_num_in_total
 
         stats = {'global_test_acc': g_test_acc, 'global_test_loss': g_test_loss}
         self.stat_info["global_test_acc"].append(g_test_acc)
@@ -246,13 +251,13 @@ class DPFedSAMAPI(object):
 
 
 def subtract(params_a, params_b):
-        w = copy.deepcopy(params_a)
-        for k in w.keys():
-                w[k] -= params_b[k]
-        return w
+    w = copy.deepcopy(params_a)
+    for k in w.keys():
+        w[k] -= params_b[k]
+    return w
 
 def add(params_a, params_b):
-        w = copy.deepcopy(params_a)
-        for k in w.keys():
-                w[k] += params_b[k]
-        return w
+    w = copy.deepcopy(params_a)
+    for k in w.keys():
+        w[k] += params_b[k]
+    return w

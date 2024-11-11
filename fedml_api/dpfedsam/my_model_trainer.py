@@ -56,7 +56,7 @@ class MyModelTrainer(ModelTrainer):
             model=model,
             base_optimizer=base_optimizer(filter(lambda p: p.requires_grad, self.model.parameters()), lr=args.lr * (args.lr_decay ** round), momentum=args.momentum, weight_decay=args.wd),
             rho=args.rho,
-            gamma=0.1,  # 可以根据需求调整
+            gamma=0.9,  # 可以根据需求调整
             adaptive=args.adaptive
         )
 

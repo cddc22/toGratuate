@@ -1,13 +1,13 @@
 import copy
 import logging
+import time
+import pdb
 import numpy as np
 import torch
 from torch import nn
-#from torch.cuda.amp import GradScaler, autocast
-from torch.amp import GradScaler, autocast
 
+from fedml_api.dpfedsam.wsam import WeightedSAM, enable_running_stats, disable_running_stats  # 引入 WeightedSAM
 
-from fedml_api.dpfedsam.wsam import WeightedSAM, enable_running_stats, disable_running_stats
 from fedml_api.model.cv.cnn_meta import Meta_net
 
 try:
@@ -19,32 +19,8 @@ except ImportError:
 class MyModelTrainer(ModelTrainer):
     def __init__(self, model, args=None, logger=None):
         super().__init__(model, args)
-        self.args = args or {}
+        self.args = args
         self.logger = logger
-        self.device = args.device if hasattr(args, 'device') else 'cpu'
-        self.scaler = GradScaler() if self.device == 'cuda' else None  # 混合精度训练器
-        self.init_optimizer(0)  # 初始时round设为0
-
-    def log(self, message):
-        if self.logger:
-            self.logger.info(message)
-        else:
-            print(message)
-
-    def init_optimizer(self, round):
-        base_optimizer = torch.optim.SGD
-        self.optimizer = WeightedSAM(
-            model=self.model,
-            base_optimizer=base_optimizer(
-                filter(lambda p: p.requires_grad, self.model.parameters()),
-                lr=self.args.lr * (self.args.lr_decay ** round),
-                momentum=self.args.momentum,
-                weight_decay=self.args.wd
-            ),
-            rho=self.args.rho,
-            gamma=getattr(self.args, "gamma", 0.9),
-            adaptive=self.args.adaptive
-        )
 
     def set_masks(self, masks):
         self.masks = masks
@@ -62,93 +38,87 @@ class MyModelTrainer(ModelTrainer):
         return params_dict
 
     def train(self, train_data, device, args, round):
-        self.init_optimizer(round)  # 更新优化器
-        model = self.model.to(device)
-        metrics = {'train_correct': 0, 'train_loss': 0, 'train_total': 0}
+        model = self.model
+        model.to(device)
+        model.train()
+        metrics = {
+            'train_correct': 0,
+            'train_loss': 0,
+            'train_total': 0
+        }
 
-        for epoch in range(args.epochs):
-            epoch_metrics = self.train_epoch(train_data, device)
-            metrics['train_correct'] += epoch_metrics['correct']
-            metrics['train_loss'] += epoch_metrics['loss']
-            metrics['train_total'] += epoch_metrics['total']
-            self.log(f'Client Index = {self.id}\tEpoch: {epoch}\tLoss: {epoch_metrics["loss"] / epoch_metrics["total"]:.6f}')
-
-        return metrics
-
-    def train_epoch(self, train_data, device):
-        metrics = {'correct': 0, 'loss': 0, 'total': 0}
-        for batch_idx, (x, labels) in enumerate(train_data):
-            batch_metrics = self.train_batch(x, labels, device)
-            metrics['correct'] += batch_metrics['correct']
-            metrics['loss'] += batch_metrics['loss']
-            metrics['total'] += batch_metrics['total']
-        return metrics
-
-    def train_batch(self, x, labels, device):
-        x, labels = x.to(device), labels.to(device)
+        # 损失函数
         criterion = nn.CrossEntropyLoss().to(device)
 
-        with autocast('cuda',enabled=bool(self.scaler)):  # 使用混合精度
-            pred = self.model(x)
-            if torch.isnan(pred).any():
-                print("Model output contains NaN values.")
-                return {'correct': 0, 'loss': 0, 'total': 0}
-            loss = criterion(pred, labels.long())
+        # 初始化 WeightedSAM 优化器
+        base_optimizer = torch.optim.SGD
+        optimizer = WeightedSAM(
+            model=model,
+            base_optimizer=base_optimizer(filter(lambda p: p.requires_grad, self.model.parameters()), lr=args.lr * (args.lr_decay ** round), momentum=args.momentum, weight_decay=args.wd),
+            rho=args.rho,
+            gamma=0.9,  # 可以根据需求调整
+            adaptive=args.adaptive
+        )
 
-        # 第一次优化步骤
-        if self.scaler:
-            self.scaler.scale(loss).backward()
-        else:
-            loss.backward()
-        
+        for epoch in range(args.epochs):
+            epoch_loss, epoch_acc = [], []
+            for batch_idx, (x, labels) in enumerate(train_data):
+                x, labels = x.to(device), labels.to(device)
 
+                # 第一轮前向-后向传播
+                pred = model(x)
+                enable_running_stats(model)
+                loss = criterion(pred, labels.long())
+                loss.backward()
+                optimizer.first_step(zero_grad=True)
 
+                # 第二轮前向-后向传播
+                disable_running_stats(model)
+                criterion(model(x), labels.long()).backward()
+                optimizer.second_step(zero_grad=True)
 
-        self.optimizer.first_step(zero_grad=True)
+                # 记录损失和正确率
+                epoch_loss.append(loss.item())
+                _, predicted = torch.max(pred, -1)
+                correct = predicted.eq(labels).sum()
+                epoch_acc.append(correct.item())
 
-        torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)  # 加入梯度裁剪
-        
+                metrics['train_correct'] += correct.item()
+                metrics['train_loss'] += loss.item() * labels.size(0)
+                metrics['train_total'] += labels.size(0)
 
-        # 第二次优化步骤
-        with autocast('cuda',enabled=bool(self.scaler)):
-            second_loss = criterion(self.model(x), labels.long())
+            print(f'Client Index = {self.id}\tEpoch: {epoch}\tLoss: {sum(epoch_loss) / len(epoch_loss):.6f}')
 
-        self.scaler.scale(second_loss).backward() if self.scaler else second_loss.backward()
-        self.optimizer.second_step(zero_grad=True)
-
-        # 更新缩放器
-        if self.scaler:
-            self.scaler.step(self.optimizer)
-            self.scaler.update()
-
-        _, predicted = torch.max(pred, -1)
-        correct = predicted.eq(labels).sum().item()
-        return {'correct': correct, 'loss': loss.item() * labels.size(0), 'total': labels.size(0)}
+        return metrics
 
     def test(self, test_data, device, args):
-        model = self.model.to(device)
+        model = self.model
+        model.to(device)
         model.eval()
-        metrics = {'test_correct': 0, 'test_loss': 0, 'test_total': 0}
+
+        metrics = {
+            'test_correct': 0,
+            'test_loss': 0,
+            'test_total': 0
+        }
+
         criterion = nn.CrossEntropyLoss().to(device)
 
         with torch.no_grad():
             for batch_idx, (x, target) in enumerate(test_data):
-                batch_metrics = self.evaluate_batch(x, target, device, criterion)
-                metrics['test_correct'] += batch_metrics['correct']
-                metrics['test_loss'] += batch_metrics['loss']
-                metrics['test_total'] += batch_metrics['total']
+                x = x.to(device)
+                target = target.to(device)
+                pred = model(x)
+                loss = criterion(pred, target.long())
+
+                _, predicted = torch.max(pred, -1)
+                correct = predicted.eq(target).sum()
+
+                metrics['test_correct'] += correct.item()
+                metrics['test_loss'] += loss.item() * target.size(0)
+                metrics['test_total'] += target.size(0)
 
         return metrics
-
-    def evaluate_batch(self, x, target, device, criterion):
-        x, target = x.to(device), target.to(device)
-        with autocast('cuda',enabled=bool(self.scaler)):
-            pred = self.model(x)
-            loss = criterion(pred, target.long())
-
-        _, predicted = torch.max(pred, -1)
-        correct = predicted.eq(target).sum().item()
-        return {'correct': correct, 'loss': loss.item() * target.size(0), 'total': target.size(0)}
 
     def test_on_the_server(self, train_data_local_dict, test_data_local_dict, device, args=None) -> bool:
         return False

@@ -105,6 +105,8 @@ def add_args(parser):
                         help='the standard deviation of client-level DP noise')
     parser.add_argument('--C', type=float, default=0.2,
                         help='the threshold of clipping in DP')
+    parser.add_argument('--gamma', type=float, default=0.9,
+                  help='the gamma')
     parser.add_argument('--num_experiments', type=int, default=3,
                         help='the number of experiments')
     return parser

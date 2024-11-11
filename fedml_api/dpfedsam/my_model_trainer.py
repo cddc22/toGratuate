@@ -78,7 +78,7 @@ class MyModelTrainer(ModelTrainer):
                 criterion(model(x), labels.long()).backward()
                 optimizer.second_step(zero_grad=True)
                 # to avoid nan loss
-                torch.nn.utils.clip_grad_norm_(self.model.parameters(), 10)
+                torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1)
 
                 # 记录损失和正确率
                 epoch_loss.append(loss.item())
